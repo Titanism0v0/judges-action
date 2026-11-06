@@ -22,6 +22,12 @@ def total_commits(_fact)
         "[#{$judge}] Repository #{repo} forbidden (transient, will retry next cycle): #{e.class}: #{e.message}"
       )
       next
+    rescue Octokit::ServerError => e
+      $loog.warn(
+        "[#{$judge}] GitHub server error on repository #{repo} " \
+        "(transient, will retry next cycle): #{e.class}: #{e.message}"
+      )
+      next
     end
     next if json[:size].nil? || json[:size].zero?
     next if json[:default_branch].nil?

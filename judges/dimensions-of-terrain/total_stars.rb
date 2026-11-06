@@ -23,6 +23,12 @@ def total_stars(_fact)
           "(transient, will retry next cycle): #{e.class}: #{e.message}"
         )
         next
+      rescue Octokit::ServerError => e
+        $loog.warn(
+          "[#{$judge}] GitHub server error on #{repo} " \
+          "(transient, will retry next cycle): #{e.class}: #{e.message}"
+        )
+        next
       end
     stars += json[:stargazers_count] || 0
     forks += json[:forks] || 0

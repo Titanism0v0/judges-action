@@ -1371,4 +1371,151 @@ class TestDimensionsOfTerrain < Jp::Test
       assert_equal({}, total_active_contributors(f), 'a partial count is saved when one repository search fails')
     end
   end
+
+  def test_keeps_later_metrics_when_one_repo_releases_returns_server_error
+    WebMock.disable_net_connect!
+    rate_limit_up
+    %w[a b].each do |name|
+      stub_github(
+        "https://api.github.com/repos/foo/#{name}",
+        body: {
+          name:, full_name: "foo/#{name}", size: 10, archived: false, default_branch: 'master',
+          stargazers_count: name == 'a' ? 5 : 7, forks: name == 'a' ? 1 : 3
+        }
+      )
+      stub_github(
+        "https://api.github.com/repos/foo/#{name}/git/trees/master?recursive=true",
+        body: {
+          sha: name, truncated: false,
+          tree: [{ path: 'f.rb', mode: '100644', type: 'blob', sha: name, size: 1 }]
+        }
+      )
+      stub_github(
+        "https://api.github.com/repos/foo/#{name}/contributors?per_page=100",
+        body: [{ login: name, id: name == 'a' ? 11 : 22, type: 'User' }]
+      )
+      stub_github(
+        "https://api.github.com/search/commits?per_page=100&q=repo:foo/#{name}%20author-date:%3E2024-08-30",
+        body: { total_count: 0, incomplete_results: false, items: [] }
+      )
+    end
+    stub_github(
+      'https://api.github.com/repos/foo/a/releases?per_page=100',
+      status: 502, body: { message: 'Server Error' }
+    )
+    stub_github(
+      'https://api.github.com/repos/foo/b/releases?per_page=100',
+      body: [{ id: 1, draft: false }, { id: 2, draft: false }]
+    )
+    fb = Factbase.new
+    loog = Loog::Buffer.new
+    Fbe.stub(:github_graph, Fbe::Graph::Fake.new) do
+      Time.stub(:now, Time.parse('2024-09-29 21:00:00 UTC')) do
+        load_it('dimensions-of-terrain', fb, Judges::Options.new({ 'repositories' => 'foo/a,foo/b' }), loog:)
+      end
+    end
+    f = fb.query("(eq what 'dimensions-of-terrain')").each.first
+    refute_nil(f, 'a 502 on one repository must not abort the judge')
+    assert_equal(2, f.total_releases, 'releases of foo/b are lost when foo/a returns 502')
+    assert_equal(2, f.total_repositories)
+    assert_equal(12, f.total_stars)
+    assert_equal(4, f.total_forks)
+    assert_includes(loog.to_s, 'GitHub server error on releases for foo/a')
+    assert_includes(loog.to_s, 'Octokit::BadGateway')
+  end
+
+  def test_skips_repo_when_repository_returns_server_error
+    WebMock.disable_net_connect!
+    rate_limit_up
+    stub_github('https://api.github.com/repos/foo/a', status: 502, body: { message: 'Server Error' })
+    stub_github(
+      'https://api.github.com/repos/foo/b',
+      body: {
+        full_name: 'foo/b', archived: false, size: 3, stargazers_count: 4, forks: 2, default_branch: 'master'
+      }
+    )
+    prepare_terrain_globals('foo/a,foo/b')
+    load(File.join(__dir__, '../../judges/dimensions-of-terrain/total_stars.rb'))
+    assert_equal({ total_stars: 4, total_forks: 2 }, total_stars(nil))
+    assert_includes($loog.to_s, 'GitHub server error on foo/a')
+    assert_includes($loog.to_s, 'Octokit::BadGateway')
+  end
+
+  def test_skips_repo_when_commits_repository_returns_server_error
+    WebMock.disable_net_connect!
+    rate_limit_up
+    stub_github('https://api.github.com/repos/foo/a', status: 502, body: { message: 'Server Error' })
+    stub_github(
+      'https://api.github.com/repos/foo/b',
+      body: { full_name: 'foo/b', archived: false, size: 3, default_branch: 'master' }
+    )
+    prepare_terrain_globals('foo/a,foo/b')
+    load(File.join(__dir__, '../../judges/dimensions-of-terrain/total_commits.rb'))
+    Fbe.stub(:github_graph, Fbe::Graph::Fake.new) do
+      assert_equal({ total_commits: 1484 }, total_commits(nil))
+    end
+    assert_includes($loog.to_s, 'GitHub server error on repository foo/a')
+    assert_includes($loog.to_s, 'Octokit::BadGateway')
+  end
+
+  def test_skips_repo_when_tree_returns_server_error
+    WebMock.disable_net_connect!
+    rate_limit_up
+    %w[a b].each do |name|
+      stub_github(
+        "https://api.github.com/repos/foo/#{name}",
+        body: { full_name: "foo/#{name}", archived: false, size: 4, default_branch: 'master' }
+      )
+    end
+    stub_github(
+      'https://api.github.com/repos/foo/a/git/trees/master?recursive=true',
+      status: 502, body: { message: 'Server Error' }
+    )
+    stub_github(
+      'https://api.github.com/repos/foo/b/git/trees/master?recursive=true',
+      body: {
+        sha: 'b', truncated: false,
+        tree: [{ path: 'f.rb', mode: '100644', type: 'blob', sha: 'b', size: 1 }]
+      }
+    )
+    prepare_terrain_globals('foo/a,foo/b')
+    load(File.join(__dir__, '../../judges/dimensions-of-terrain/total_files.rb'))
+    assert_equal({ total_files: 1 }, total_files(nil))
+    assert_includes($loog.to_s, 'GitHub server error on tree for foo/a')
+    assert_includes($loog.to_s, 'Octokit::BadGateway')
+  end
+
+  def test_skips_repo_when_contributors_returns_server_error
+    WebMock.disable_net_connect!
+    rate_limit_up
+    %w[a b].each do |name|
+      stub_github(
+        "https://api.github.com/repos/foo/#{name}",
+        body: { full_name: "foo/#{name}", archived: false, size: 4, default_branch: 'master' }
+      )
+    end
+    stub_github(
+      'https://api.github.com/repos/foo/a/contributors?per_page=100',
+      status: 502, body: { message: 'Server Error' }
+    )
+    stub_github(
+      'https://api.github.com/repos/foo/b/contributors?per_page=100',
+      body: [{ login: 'b', id: 9, type: 'User' }]
+    )
+    prepare_terrain_globals('foo/a,foo/b')
+    load(File.join(__dir__, '../../judges/dimensions-of-terrain/total_contributors.rb'))
+    assert_equal({ total_contributors: 1 }, total_contributors(nil))
+    assert_includes($loog.to_s, 'GitHub server error on contributors for foo/a')
+    assert_includes($loog.to_s, 'Octokit::BadGateway')
+  end
+
+  def prepare_terrain_globals(repositories)
+    $judge = 'dimensions-of-terrain'
+    $global = {}
+    $local = {}
+    $options = Judges::Options.new({ 'repositories' => repositories })
+    $loog = Loog::Buffer.new
+    $epoch = Time.now
+    $kickoff = Time.now
+  end
 end

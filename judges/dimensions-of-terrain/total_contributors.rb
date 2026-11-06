@@ -23,6 +23,12 @@ def total_contributors(_fact)
           "(transient, will retry next cycle): #{e.class}: #{e.message}"
         )
         next
+      rescue Octokit::ServerError => e
+        $loog.warn(
+          "[#{$judge}] GitHub server error on #{repo} " \
+          "(transient, will retry next cycle): #{e.class}: #{e.message}"
+        )
+        next
       end
     next if json[:size].nil? || json[:size].zero?
     list =
@@ -34,6 +40,12 @@ def total_contributors(_fact)
       rescue Octokit::Forbidden => e
         $loog.warn(
           "[#{$judge}] Access forbidden to contributors for #{repo} " \
+          "(transient, will retry next cycle): #{e.class}: #{e.message}"
+        )
+        next
+      rescue Octokit::ServerError => e
+        $loog.warn(
+          "[#{$judge}] GitHub server error on contributors for #{repo} " \
           "(transient, will retry next cycle): #{e.class}: #{e.message}"
         )
         next

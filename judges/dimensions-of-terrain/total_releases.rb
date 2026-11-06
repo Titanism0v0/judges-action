@@ -22,6 +22,12 @@ def total_releases(_fact)
           "(transient, will retry next cycle): #{e.class}: #{e.message}"
         )
         next
+      rescue Octokit::ServerError => e
+        $loog.warn(
+          "[#{$judge}] GitHub server error on releases for #{repo} " \
+          "(transient, will retry next cycle): #{e.class}: #{e.message}"
+        )
+        next
       end
     next unless releases.is_a?(Array)
     releases.reject { |release| release[:draft] }.each do |_|
